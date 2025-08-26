@@ -24,7 +24,9 @@ export abstract class BaseRuntimeService {
     if (this.parentSpecVersion !== specVersion) {
       const parentSpecVersionCopy = this.parentSpecVersion;
       this.parentSpecVersion = specVersion;
-      await this.prefetchMeta(height);
+      if (this.apiService.isArchive) {
+        await this.prefetchMeta(height);
+      }
       // When runtime init parentSpecVersion is undefined, count as unchanged,
       // so it will not use fetchRuntimeVersionRange
       return parentSpecVersionCopy !== undefined;
@@ -54,13 +56,17 @@ export abstract class BaseRuntimeService {
   }
 
   async getSpecFromApi(height: number): Promise<number> {
-    const parentBlockHash = await this.api.rpc.chain.getBlockHash(
-      Math.max(height - 1, 0),
-    );
-    const runtimeVersion =
-      await this.api.rpc.state.getRuntimeVersion(parentBlockHash);
-    const specVersion = runtimeVersion.specVersion.toNumber();
-    return specVersion;
+    if (this.apiService.isArchive) {
+      const parentBlockHash = await this.api.rpc.chain.getBlockHash(
+        Math.max(height - 1, 0),
+      );
+      const runtimeVersion =
+        await this.api.rpc.state.getRuntimeVersion(parentBlockHash);
+      const specVersion = runtimeVersion.specVersion.toNumber();
+      return specVersion;
+    } else {
+      return 0;
+    }
   }
 
   @profiler()
@@ -101,10 +107,27 @@ export abstract class BaseRuntimeService {
       !this.currentRuntimeVersion ||
       this.currentRuntimeVersion.specVersion.toNumber() !== block.specVersion
     ) {
-      this.currentRuntimeVersion = await this.api.rpc.state.getRuntimeVersion(
-        block.block.header.parentHash,
-      );
+      if (this.apiService.isArchive) {
+        this.currentRuntimeVersion = await this.api.rpc.state.getRuntimeVersion(
+          block.block.header.parentHash,
+        );
+      } else {
+        this.currentRuntimeVersion = this.createEmptyRuntimeVersion();
+      }
     }
     return this.currentRuntimeVersion;
+  }
+
+  private createEmptyRuntimeVersion() {
+    return this.api.registry.createType('RuntimeVersion', {
+      specName: '',
+      implName: '',
+      authoringVersion: 0,
+      specVersion: 0,
+      implVersion: 0,
+      apis: [],
+      transactionVersion: 0,
+      stateVersion: 0,
+    }) as RuntimeVersion;
   }
 }

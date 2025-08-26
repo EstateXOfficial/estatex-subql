@@ -36,7 +36,10 @@ import {
   getBlockByHeight,
   getTimestamp,
   getHeaderForHash,
+  getProviderEndpoint,
+  createEmptyRuntimeVersion,
 } from './utils/substrate';
+import { RuntimeVersion } from '@polkadot/types/interfaces';
 
 const BLOCK_TIME_VARIANCE = 5000; //ms
 const INTERVAL_PERCENT = 0.9;
@@ -136,10 +139,38 @@ export class BlockchainService
   }
 
   async getFinalizedHeader(): Promise<Header> {
-    const finalizedHash =
-      await this.apiService.unsafeApi.rpc.chain.getFinalizedHead();
+    if (this.apiService.isArchive) {
+      const finalizedHash =
+        await this.apiService.unsafeApi.rpc.chain.getFinalizedHead();
 
-    return this.getHeaderForHash(finalizedHash.toHex());
+      return this.getHeaderForHash(finalizedHash.toHex());
+    } else {
+      const endpoint = getProviderEndpoint(this.apiService.unsafeApi);
+      if (!endpoint) {
+        throw new Error('Provider endpoint not found from unsafeApi');
+      }
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'chain_getFinalizedHead',
+          params: [],
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Network error: ${res.status} ${res.statusText}`);
+      }
+
+      const { result: finalizedHash } = (await res.json()) as { result: string };
+      if (!finalizedHash) {
+        throw new Error('chain_getFinalizedHead returned empty hash');
+      }
+
+      return this.getHeaderForHashRPC(finalizedHash);
+    }
   }
 
   async getBestHeight(): Promise<number> {
@@ -159,6 +190,41 @@ export class BlockchainService
   @mainThreadOnly()
   async getHeaderForHash(hash: string): Promise<Header> {
     return getHeaderForHash(this.apiService.unsafeApi, hash);
+  }
+
+  @mainThreadOnly()
+  async getHeaderForHashRPC(hash: string): Promise<Header> {
+    const endpoint = getProviderEndpoint(this.apiService.unsafeApi);
+    if (!endpoint) {
+      throw new Error('Provider endpoint not found from unsafeApi');
+    }
+    
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'chain_getBlock',
+        params: [hash],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Network error: ${res.status} ${res.statusText}`);
+    }
+
+    const data = (await res.json()) as { result?: { block: any } };
+    if (!data.result?.block) {
+      throw new Error(`chain_getBlock returned empty block for hash ${hash}`);
+    }
+
+    const header = data.result.block.header;
+    return {
+      blockHeight: parseInt(header.number, 16),
+      blockHash: header.hash,
+      parentHash: header.parentHash,
+      timestamp: new Date(0),
+    };
   }
 
   // TODO can this decorator be in unfinalizedBlocks Service?
@@ -186,9 +252,15 @@ export class BlockchainService
   }
 
   async getSafeApi(block: LightBlockContent | BlockContent): Promise<ApiAt> {
-    const runtimeVersion = !isFullBlock(block)
-      ? undefined
-      : await this.runtimeService.getRuntimeVersion(block.block);
+    let runtimeVersion : RuntimeVersion | undefined;
+    
+    if (this.apiService.isArchive) {
+      runtimeVersion = !isFullBlock(block)
+        ? undefined
+        : await this.runtimeService.getRuntimeVersion(block.block);
+    } else {
+      runtimeVersion = createEmptyRuntimeVersion(this.apiService.api.registry);
+    }
 
     return this.apiService.getPatchedApi(
       block.block.block.header,

@@ -169,8 +169,12 @@ export async function registerApp<P extends ISubqueryProject>(
     });
     rawManifest = await reader.getProjectSchema();
     rebaseArgsWithManifest(argv, rawManifest);
+
+    const minConfig = yargsToIConfig(argv, nameMapping);
+    const isArchive = argv.archiveNode ?? minConfig.archiveNode ?? false;
+
     // Create new nodeConfig with rebased argv
-    config = new NodeConfig(defaultSubqueryName(yargsToIConfig(argv, nameMapping)), isTest);
+    config = new NodeConfig(defaultSubqueryName(minConfig), isTest, isArchive);
   }
 
   if (!validDbSchemaName(config.dbSchema)) {

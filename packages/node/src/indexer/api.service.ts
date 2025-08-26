@@ -261,9 +261,10 @@ export class ApiService
       }
     }
 
-    const fetchFunc = skipTransactions
-      ? SubstrateUtil.fetchBlocksBatchesLight
-      : SubstrateUtil.fetchBlocksBatches;
+    const fetchFunc = this.nodeConfig.isArchive ? SubstrateUtil.fetchBlocksBatchesNonArchive
+      : skipTransactions
+        ? SubstrateUtil.fetchBlocksBatchesLight
+        : SubstrateUtil.fetchBlocksBatches;
 
     if (this.nodeConfig?.profiler) {
       this._fetchBlocksFunction = profilerWrap(
@@ -274,6 +275,10 @@ export class ApiService
     } else {
       this._fetchBlocksFunction = fetchFunc;
     }
+  }
+
+  get isArchive(): boolean {
+    return this.nodeConfig.isArchive;
   }
 
   get api(): ApiPromise {
@@ -288,10 +293,21 @@ export class ApiService
     this._currentBlockNumber = header.number.toNumber();
 
     const api = this.api;
-    const apiAt = (await api.at(
-      this.currentBlockHash,
-      runtimeVersion,
-    )) as ApiAt;
+    let apiAt: ApiAt;
+
+    if (this.nodeConfig.isArchive) {
+      apiAt = (await api.at(
+        this.currentBlockHash,
+        runtimeVersion,
+      )) as ApiAt;
+    } else {
+      const rpc = { ...api.rpc };
+      apiAt = {
+        ...this.api,
+        rpc,
+      } as unknown as ApiAt;
+    }
+    
     this.patchApiRpc(api, apiAt);
     return apiAt;
   }

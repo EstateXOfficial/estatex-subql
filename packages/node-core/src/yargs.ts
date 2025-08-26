@@ -277,6 +277,12 @@ export function yargsBuilder<
                 type: 'boolean',
                 default: true,
               },
+              'archive-node': {
+                demandOption: false,
+                describe: 'Whether the node is archived or not',
+                type: 'boolean',
+                default: false,
+              }
             })
             .hide('root'), // root is hidden because its for internal use
         handler: () => {

@@ -33,6 +33,7 @@ import { merge } from 'lodash';
 import { SubqlProjectBlockFilter } from '../configure/SubqueryProject';
 import { ApiPromiseConnection } from '../indexer/apiPromise.connection';
 import { BlockContent, LightBlockContent } from '../indexer/types';
+import { Registry } from '@polkadot/types/types/registry';
 
 const logger = getLogger('fetch');
 const INTERVAL_THRESHOLD = BN_THOUSAND.div(BN_TWO);
@@ -114,13 +115,47 @@ export async function getHeaderForHash(
   return substrateBlockToHeader(block);
 }
 
+export async function getHeaderForHashNonArchive(
+  api: ApiPromise,
+  blockHash: string,
+): Promise<Header> {
+  const endpoint = getProviderEndpoint(api);
+  if (!endpoint)
+    throw new Error('Cannot get provider endpoint from ApiPromise');
+
+  const headerRes = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'chain_getHeader',
+      params: [blockHash],
+    }),
+  });
+  if (!headerRes.ok)
+    throw new Error(`Network error getting header`);
+
+  const data = (await headerRes.json()) as { result?: any };
+  if (!data.result)
+    throw new Error(`chain_getHeader returned empty result for hash ${blockHash}`);
+
+  const header = data.result;
+  return {
+    blockHeight: parseInt(header.number, 16),
+    blockHash,
+    parentHash: header.parentHash,
+    timestamp: new Date(0),
+  };
+}
+
 export function wrapExtrinsics(
   wrappedBlock: SubstrateBlock,
   allEvents: EventRecord[],
 ): SubstrateExtrinsic[] {
   const groupedEvents = groupEventsByExtrinsic(allEvents);
   return wrappedBlock.block.extrinsics.map((extrinsic, idx) => {
-    const events = groupedEvents[idx];
+    const events = groupedEvents[idx] ?? [];
     return {
       idx,
       extrinsic,
@@ -349,54 +384,188 @@ export async function getHeaderByHeight(
   return header;
 }
 
+export async function getBlockByHeightNonArchive(
+  api: ApiPromise,
+  height: number,
+): Promise<SignedBlock> {
+  const endpoint = getProviderEndpoint(api);
+  if (!endpoint)
+    throw new Error('Cannot get provider endpoint from ApiPromise');
+
+  const hashRes = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'chain_getBlockHash',
+      params: [height],
+    }),
+  });
+  if (!hashRes.ok)
+    throw new Error(`Network error fetching block hash`);
+
+  const { result: blockHash } = (await hashRes.json()) as { result: string };
+  if (!blockHash)
+    throw new Error(`chain_getBlockHash returned empty hash`);
+
+  const blockRes = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'chain_getBlock',
+      params: [blockHash],
+    }),
+  });
+  const blockData = (await blockRes.json()) as { result?: any };
+  if (!blockData.result) throw new Error('Empty block');
+
+  const signedBlock = api.registry.createType('SignedBlock', {
+    block: {
+      header: {
+        ...blockData.result.block.header,
+        hash: blockHash,
+      },
+      extrinsics: blockData.result.block.extrinsics,
+    },
+    justifications: blockData.result.justifications,
+  }) as SignedBlock;
+
+  return signedBlock;
+}
+
+export async function getHeaderByHeightNonArchive(
+  api: ApiPromise,
+  height: number,
+): Promise<SubstrateHeader> {
+  const endpoint = getProviderEndpoint(api);
+  if (!endpoint)
+    throw new Error('Cannot get provider endpoint from ApiPromise');
+
+  const hashRes = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'chain_getBlockHash',
+      params: [height],
+    }),
+  });
+  if (!hashRes.ok)
+    throw new Error(`Network error fetching block hash`);
+
+  const { result: blockHash } = (await hashRes.json()) as { result: string };
+  if (!blockHash)
+    throw new Error(`chain_getBlockHash returned empty hash`);
+
+  const headerRes = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'chain_getHeader',
+      params: [blockHash],
+    }),
+  });
+  if (!headerRes.ok)
+    throw new Error(`Network error fetching header`);
+
+  const { result: { block: header } } = (await headerRes.json()) as { result: { block: any } };
+  if (!header)
+    throw new Error(`chain_getHeader returned empty result`);
+
+  if (header.hash !== blockHash)
+    throw new Error(
+      `fetched block header hash ${header.hash} is not match with blockHash ${blockHash} at block ${height}. This is likely a problem with the rpc provider.`,
+    );
+
+  return api.registry.createType('Header', header) as SubstrateHeader;
+}
+
 export async function fetchBlocksArray(
   api: ApiPromise,
   blockArray: number[],
+  isArchive: boolean = false,
 ): Promise<SignedBlock[]> {
-  return Promise.all(
-    blockArray.map(async (height) => getBlockByHeight(api, height)),
-  );
+  if (isArchive) {
+    return Promise.all(
+      blockArray.map(async (height) => getBlockByHeight(api, height)),
+    );
+  } else {
+    return Promise.all(
+      blockArray.map(async (height) => getBlockByHeightNonArchive(api, height)),
+    );
+  }
 }
 
 export async function fetchHeaderArray(
   api: ApiPromise,
   blockArray: number[],
+  isArchive: boolean = false,
 ): Promise<SubstrateHeader[]> {
-  return Promise.all(
-    blockArray.map(async (height) => getHeaderByHeight(api, height)),
-  );
+  if (isArchive) {
+    return Promise.all(
+      blockArray.map(async (height) => getHeaderByHeight(api, height)),
+    );
+  } else {
+    return Promise.all(
+      blockArray.map(async (height) => getHeaderByHeightNonArchive(api, height)),
+    );
+  }
 }
 
 export async function fetchEventsRange(
   api: ApiPromise,
   hashs: BlockHash[],
+  isArchive: boolean = false,
 ): Promise<Vec<EventRecord>[]> {
-  return Promise.all(
-    hashs.map((hash) =>
-      api.query.system.events.at(hash).catch((e) => {
-        logger.error(
-          `failed to fetch events at block ${hash}${getApiDecodeErrMsg(
-            e.message,
-          )}`,
-        );
-        throw ApiPromiseConnection.handleError(e);
+  if (isArchive) {
+    return Promise.all(
+      hashs.map((hash) =>
+        api.query.system.events.at(hash).catch((e) => {
+          logger.error(
+            `failed to fetch events at block ${hash}${getApiDecodeErrMsg(
+              e.message,
+            )}`,
+          );
+          throw ApiPromiseConnection.handleError(e);
+        }),
+      ),
+    );
+  } else {
+    return Promise.all(
+      hashs.map((hash) => {
+        return api.registry.createType('Vec<EventRecord>', []) as Vec<EventRecord>;
       }),
-    ),
-  );
+    );
+  }
 }
 
 export async function fetchRuntimeVersionRange(
   api: ApiPromise,
   hashs: BlockHash[],
+  isArchive: boolean = false,
 ): Promise<RuntimeVersion[]> {
-  return Promise.all(
-    hashs.map((hash) =>
-      api.rpc.state.getRuntimeVersion(hash).catch((e) => {
-        logger.error(`failed to fetch RuntimeVersion at block ${hash}`);
-        throw ApiPromiseConnection.handleError(e);
-      }),
-    ),
+  if (isArchive) {
+    return Promise.all(
+      hashs.map((hash) =>
+        api.rpc.state.getRuntimeVersion(hash).catch((e) => {
+          logger.error(`failed to fetch RuntimeVersion at block ${hash}`);
+          throw ApiPromiseConnection.handleError(e);
+        }),
+      ),
+    );
+  } else {
+      return Promise.all(
+    hashs.map((hash) => {
+      return createEmptyRuntimeVersion(api.registry);
+    }),
   );
+  }
 }
 
 export async function fetchBlocksBatches(
@@ -501,6 +670,76 @@ export function calcInterval(api: ApiPromise): BN {
           ? DEFAULT_TIME.mul(BN_TWO)
           : DEFAULT_TIME),
   );
+}
+
+export async function fetchBlocksBatchesNonArchive(
+  api: ApiPromise,
+  blockArray: number[],
+  overallSpecVer?: number,
+): Promise<IBlock<BlockContent>[]> {
+  const blocks = await fetchBlocksArray(api, blockArray, true);
+  const blockHashs = blocks.map((b) => b.block.header.hash);
+  const parentBlockHashs = blocks.map((b) => b.block.header.parentHash);
+  // If overallSpecVersion passed, we don't need to use api to get runtimeVersions
+  // wrap block with specVersion
+  // If specVersion changed, we also not guarantee in this batch contains multiple runtimes,
+  // therefore we better to fetch runtime over all blocks
+  const [blockEvents, runtimeVersions] = await Promise.all([
+    fetchEventsRange(api, blockHashs, true),
+    overallSpecVer !== undefined // note, we need to be careful if spec version is 0
+      ? undefined
+      : fetchRuntimeVersionRange(api, parentBlockHashs, true),
+  ]);
+
+  return blocks.map((block, idx) => {
+    const events = blockEvents[idx];
+    const parentSpecVersion =
+      overallSpecVer ?? runtimeVersions?.[idx].specVersion.toNumber();
+    assert(parentSpecVersion !== undefined, 'parentSpecVersion is undefined');
+
+    const wrappedBlock = wrapBlock(block, events.toArray(), parentSpecVersion);
+    const wrappedExtrinsics = wrapExtrinsics(wrappedBlock, events);
+    const wrappedEvents = wrapEvents(wrappedExtrinsics, events, wrappedBlock);
+
+    return {
+      getHeader: () => substrateBlockToHeader(wrappedBlock),
+      block: {
+        block: wrappedBlock,
+        extrinsics: wrappedExtrinsics,
+        events: wrappedEvents,
+      },
+    };
+  });
+}
+
+export function getProviderEndpoint(api: ApiPromise): string | null {
+  const a = api as any;
+
+  const endpoint =
+  a?._rpcCore?.provider?.endpoint ||
+  a?._options?.provider?.endpoint ||
+  null;
+
+  if (typeof endpoint === 'string') {
+    return endpoint
+      .replace(/^ws:\/\//, 'http://')
+      .replace(/^wss:\/\//, 'https://');
+  }
+
+  return null;
+}
+
+export function createEmptyRuntimeVersion(registry: Registry) {
+  return registry.createType('RuntimeVersion', {
+    specName: '',
+    implName: '',
+    authoringVersion: 0,
+    specVersion: 0,
+    implVersion: 0,
+    apis: [],
+    transactionVersion: 0,
+    stateVersion: 0,
+  }) as RuntimeVersion;
 }
 
 function getApiDecodeErrMsg(errMsg: string): string {

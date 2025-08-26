@@ -65,6 +65,7 @@ export interface IConfig {
   readonly monitorFileSize?: number;
   readonly monitorObjectMaxDepth: number;
   readonly enableCache?: boolean;
+  readonly archiveNode?: boolean;
 }
 
 export type MinConfig = Partial<Omit<IConfig, 'subquery'>> & Pick<IConfig, 'subquery'>;
@@ -94,6 +95,7 @@ const DEFAULT_CONFIG = {
   allowSchemaMigration: false,
   monitorOutDir: './.monitor',
   monitorObjectMaxDepth: 5,
+  archiveNode: false,
 };
 
 export class NodeConfig<C extends IConfig = IConfig> implements IConfig {
@@ -121,8 +123,11 @@ export class NodeConfig<C extends IConfig = IConfig> implements IConfig {
     return new NodeConfig(_config, (config as any)._isTest);
   }
 
-  constructor(config: MinConfig, isTest?: boolean) {
-    this._config = assign({}, DEFAULT_CONFIG, config) as C;
+  constructor(config: MinConfig, isTest?: boolean, isArchive?: boolean) {
+    this._config = assign(
+      assign({}, DEFAULT_CONFIG, config), 
+      { archiveNode: isArchive ?? config.archiveNode ?? false }
+    ) as C;
     this._isTest = isTest ?? false;
   }
 
@@ -381,6 +386,10 @@ export class NodeConfig<C extends IConfig = IConfig> implements IConfig {
 
   get enableCache(): boolean {
     return this._config.enableCache ?? true;
+  }
+
+  get isArchive(): boolean {
+    return !!this._config.archiveNode;
   }
 
   merge(config: Partial<IConfig>): this {

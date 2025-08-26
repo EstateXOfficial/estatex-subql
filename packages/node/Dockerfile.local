@@ -1,0 +1,83 @@
+# Build stage
+FROM node:lts-alpine AS builder
+
+# Set working directory
+WORKDIR /app
+
+# Copy files for dependencies
+COPY package.json yarn.lock .yarnrc.yml ./
+COPY .yarn .yarn
+COPY ./tsconfig.json ./tsconfig.json
+
+# Install yarn 3.x
+RUN corepack enable && \
+  corepack prepare yarn@3.6.0 --activate && \
+  yarn plugin import workspace-tools
+
+COPY ./packages/cli/package.json ./packages/cli/package.json
+COPY ./packages/common/package.json ./packages/common/package.json
+COPY ./packages/common-substrate/package.json ./packages/common-substrate/package.json
+COPY ./packages/node/package.json ./packages/node/package.json
+COPY ./packages/node-core/package.json ./packages/node-core/package.json
+COPY ./packages/query/package.json ./packages/query/package.json
+COPY ./packages/testing/package.json ./packages/testing/package.json
+COPY ./packages/types/package.json ./packages/types/package.json
+COPY ./packages/types-core/package.json ./packages/types-core/package.json
+COPY ./packages/utils/package.json ./packages/utils/package.json
+
+RUN yarn install
+
+COPY ./packages ./packages
+
+#RUN yarn workspaces foreach -p run build
+RUN yarn build
+
+RUN yarn workspaces focus \
+  @subql/types-core \
+  @subql/utils \
+  @subql/common \
+  @subql/node-core \
+  @subql/testing \
+  @subql/types \
+  @subql/common-substrate \
+  @subql/node --production
+
+RUN cp -LR node_modules /node_modules_final
+
+
+# Production stage
+FROM node:lts-alpine
+
+COPY --from=builder /node_modules_final ./node_modules
+
+COPY --from=builder /app/packages/node/bin ./bin
+COPY --from=builder /app/packages/node/dist ./dist
+COPY --from=builder /app/packages/node/docker ./docker
+
+COPY --from=builder /app/packages/node/CHANGELOG.md ./
+COPY --from=builder /app/packages/node/LICENSE ./
+COPY --from=builder /app/packages/node/README.md ./
+COPY --from=builder /app/packages/node/nest-cli.json ./
+COPY --from=builder /app/packages/node/nodemon.json ./
+COPY --from=builder /app/packages/node/package.json ./
+COPY --from=builder /app/packages/node/tsconfig.build.json ./
+COPY --from=builder /app/packages/node/tsconfig.json ./
+
+RUN chmod +x /bin/run
+
+#RUN du -sh */ | sort -h
+#RUN find . -type d -name "dist"
+
+# Install production dependencies, create ./.monitor directory and set permissions
+RUN apk add --no-cache tini curl git && \
+  mkdir -p .monitor && \
+  chown 1000:1000 .monitor
+
+# Make the user not ROOT
+USER 1000
+# Fix timezone to UTC
+ENV TZ=utc
+
+# Set Entry point and command
+ENTRYPOINT ["/sbin/tini", "--", "/bin/run"]
+CMD ["-f","/app"]
