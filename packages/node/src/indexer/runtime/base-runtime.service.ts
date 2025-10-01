@@ -71,6 +71,10 @@ export abstract class BaseRuntimeService {
 
   @profiler()
   async prefetchMeta(height: number): Promise<void> {
+    if (!this.apiService.isArchive) {
+      return;
+    }
+    
     const blockHash = await this.api.rpc.chain.getBlockHash(height);
     if (
       this.parentSpecVersion !== undefined &&
